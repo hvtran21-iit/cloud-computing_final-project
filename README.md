@@ -36,3 +36,38 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 
 apt-get install -y nodejs
 ```
+
+3. **The Resume Builder launches, but there is no automatic redirect to viewer webpage after uploading documents**
+
+Solution: The error is caused by the form-action 'self' rejecting the redirect to viewer on port 8081, which is foreign from the uploader on port 8080 (see picture below from web inspection console). So, edit the uploader app's app.js using the code snippet provided (or manually edit the app.js using nano/vim) to allow port 8081.
+
+<img width="975" height="528" alt="image" src="https://github.com/user-attachments/assets/1e98197e-a32f-40bd-868a-54a44a4435fa" />
+
+```
+# Assuming in /final_project/ directory
+sed -i "s|form-action 'self'\"|form-action 'self' http://*:8081\"|" uploader-app/app.js
+grep -n "Content-Security-Policy" uploader-app/app.js
+```
+
+4. **The uploader/viewer is consistently reporting draining and/or looping unhealthy status checks, but no error message is showing for me to troubleshoot**
+
+Solution: You will have to SSH into the given instances (either uploader or viewer, depending on where you will need to find the errors). Use these code snippets to find the information needed. Note that you may have to cd .. or mv your keypair into /final_project/ in order for the keypair to be read. Depending on the public IP address used, that will determine which instance you SSH into.
+
+```
+aws ec2 describe-instances \
+    --query "Reservations[*].Instances[*].PublicIpAddress" \
+    --output text
+
+ssh -i YOUR_KEY.pem ec2-user@<that-ip>
+
+sudo journalctl -u uploader -n 50 --no-pager
+
+sudo tail -60 /var/log/cloud-init-output.log
+
+head -3 /opt/app/app.js
+
+curl -s localhost:3000/ | head -5
+
+# This is also helpful for soft resetting the "too many email requests" protection measure, but this does not reset its hard limits on Gemini's end.
+sudo systemctl restart viewer
+```
