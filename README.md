@@ -9,6 +9,17 @@
 - Modify existing shell scripts and app.js files to meet project requirements
 
 ---
+
+### Proof of Cleanup
+
+<img width="975" height="333" alt="image" src="https://github.com/user-attachments/assets/ece7d71a-4cec-4487-8fd9-cb2953b98c88" />
+
+
+<img width="975" height="265" alt="image" src="https://github.com/user-attachments/assets/ba8baa77-bece-4ec3-a866-c5455b972c8f" />
+
+<img width="1082" height="108" alt="image" src="https://github.com/user-attachments/assets/d468f490-904d-4c06-af51-bdcca940ff43" />
+
+---
 Troubleshooting -- Issues I encountered during implementation
 ---
 > Note: API key does not start with Aiza anymore; rather, it starts with AQ.
