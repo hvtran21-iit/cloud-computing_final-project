@@ -8,9 +8,10 @@
 - Troubleshoot Node version incompatibilities on local and uploader/viewer tiers
 - Modify existing shell scripts and app.js files to meet project requirements
 
-### Troubleshooting -- Issues I encountered during implementation
-
-Note: API key does not start with Aiza anymore; rather, it starts with AQ.
+---
+Troubleshooting -- Issues I encountered during implementation
+---
+> Note: API key does not start with Aiza anymore; rather, it starts with AQ.
 
 1. **SNS is not working locally on CLI, it returns an AuthorizationError**
 
