@@ -71,3 +71,9 @@ curl -s localhost:3000/ | head -5
 # This is also helpful for soft resetting the "too many email requests" protection measure, but this does not reset its hard limits on Gemini's end.
 sudo systemctl restart viewer
 ```
+
+5. **The uploader/viewer is reporting malformed package/app error messages**
+
+<img width="841" height="659" alt="image" src="https://github.com/user-attachments/assets/0fed1e2d-ee80-4cf6-b19c-0505ae9be5b5" />
+
+Solution: Double check the create_app_stack.sh script and ensure that VIEWER_APP_JS_B64, VIEWER_PKG_JSON_B64, UPLOADER_APP_JS_B64, UPLOADER_PKG_JSON_B64 have proper compression applied. Then, check that the successive echo variable statements also use decompression pipe to /opt/app/app.js.
