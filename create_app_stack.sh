@@ -2,6 +2,7 @@
 set -e
 
 export $(grep -v '^#' .env | xargs)
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text) #E2
 
 echo "== S3 bucket =="
 if aws s3api head-bucket --bucket "$BUCKET_NAME" --region "$AWS_REGION" 2>/dev/null; then
@@ -11,18 +12,25 @@ else
         --create-bucket-configuration LocationConstraint="$AWS_REGION"
 fi
 
+# E4: delete everything under resumes/ after 1 day
+aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET_NAME" --region "$AWS_REGION" \
+  --lifecycle-configuration '{"Rules":[{"ID":"expire-resumes-after-1-day","Status":"Enabled","Filter":{"Prefix":"resumes/"},"Expiration":{"Days":1}}]}'
+
 cat > trust-policy.json << 'EOF'
 { "Version": "2012-10-17", "Statement": [
 { "Effect": "Allow", "Principal": { "Service": "ec2.amazonaws.com" }, "Action": "sts:AssumeRole" } ] }
 EOF
 
-echo "== Uploader role (PutObject on shared.txt only) =="
+# E2: Gemini key, removed trailing
+echo "== Uploader role (PutObject on resumes/*, GetParameter on the Gemini key) =="
 aws iam create-role --role-name "$UPLOADER_ROLE_NAME" \
     --assume-role-policy-document file://trust-policy.json 2>/dev/null || echo "Role exists, skipping."
 
+# E2: uploader policy
 cat > uploader-policy.json << EOF
 { "Version": "2012-10-17", "Statement": [
-{ "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::${BUCKET_NAME}/shared.txt" } ] }
+{ "Effect": "Allow", "Action": ["s3:PutObject"], "Resource": "arn:aws:s3:::${BUCKET_NAME}/resumes/*" },
+{ "Effect": "Allow", "Action": ["ssm:GetParameter"], "Resource": "arn:aws:ssm:${AWS_REGION}:${ACCOUNT_ID}:parameter${GEMINI_KEY_PARAM}" } ] }
 EOF
 
 aws iam wait role-exists --role-name "$UPLOADER_ROLE_NAME"
@@ -35,16 +43,17 @@ aws iam create-instance-profile --instance-profile-name "$UPLOADER_PROFILE_NAME"
 aws iam add-role-to-instance-profile --instance-profile-name "$UPLOADER_PROFILE_NAME" \
     --role-name "$UPLOADER_ROLE_NAME" 2>/dev/null || true
 
-echo "== Viewer role (GetObject + ListBucket on shared.txt only) =="
+echo "== Viewer role (GetObject on resumes/*, SNS on one topic, no ListBucket) =="
 aws iam create-role --role-name "$VIEWER_ROLE_NAME" \
     --assume-role-policy-document file://trust-policy.json 2>/dev/null || echo "Role exists, skipping."
 
 aws iam wait role-exists --role-name "$VIEWER_ROLE_NAME"
 
+# E2: viewer policy
 cat > viewer-policy.json << EOF
 { "Version": "2012-10-17", "Statement": [
-{ "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::${BUCKET_NAME}/shared.txt" },
-{ "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::${BUCKET_NAME}" } ] }
+{ "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::${BUCKET_NAME}/resumes/*" },
+{ "Effect": "Allow", "Action": ["sns:ListSubscriptionsByTopic","sns:Subscribe","sns:Publish"], "Resource": "${SNS_TOPIC_ARN}" } ] }
 EOF
 
 aws iam put-role-policy --role-name "$VIEWER_ROLE_NAME" \
@@ -58,21 +67,24 @@ aws iam add-role-to-instance-profile --instance-profile-name "$VIEWER_PROFILE_NA
 echo "Waiting 15s for IAM propagation..."
 sleep 15
 
-echo "== Building user-data from local lab03/ files =="
+echo "== Building user-data from local final_project/ files =="
 
-UPLOADER_APP_JS_B64=$(base64 -w0 lab03/uploader-app/app.js)
-UPLOADER_PKG_JSON_B64=$(base64 -w0 lab03/uploader-app/package.json)
+# E3a: compression for uploader tier
+UPLOADER_APP_JS_B64=$(gzip -9c uploader-app/app.js | base64 -w0)
+UPLOADER_PKG_JSON_B64=$(gzip -9c uploader-app/package.json | base64 -w0)
 
+# Node and decompression
 cat > user-data-uploader.sh << EOF
 #!/bin/bash
 dnf update -y
-dnf install -y nodejs
+dnf install -y nodejs22 nodejs22-npm
 mkdir -p /opt/app
-echo "$UPLOADER_APP_JS_B64" | base64 -d > /opt/app/app.js
-echo "$UPLOADER_PKG_JSON_B64" | base64 -d > /opt/app/package.json
+echo "$UPLOADER_APP_JS_B64" | base64 -d | gunzip > /opt/app/app.js
+echo "$UPLOADER_PKG_JSON_B64" | base64 -d | gunzip > /opt/app/package.json
 cd /opt/app
 npm install --omit=dev
 
+# E3B: uploader settings
 cat > /etc/systemd/system/uploader.service << 'SERVICE'
 [Unit]
 Description=Uploader App
@@ -80,6 +92,8 @@ After=network.target
 [Service]
 Environment=BUCKET_NAME=$BUCKET_NAME
 Environment=AWS_REGION=$AWS_REGION
+Environment=VIEWER_PORT=$VIEWER_LISTENER_PORT
+Environment=GEMINI_KEY_PARAM=$GEMINI_KEY_PARAM
 Environment=PORT=3000
 WorkingDirectory=/opt/app
 ExecStart=/usr/bin/node /opt/app/app.js
@@ -95,19 +109,22 @@ systemctl enable uploader.service
 systemctl start uploader.service
 EOF
 
-VIEWER_APP_JS_B64=$(base64 -w0 lab03/viewer-app/app.js)
-VIEWER_PKG_JSON_B64=$(base64 -w0 lab03/viewer-app/package.json)
+# E3b: viewer settings
+VIEWER_APP_JS_B64=$(gzip -9c viewer-app/app.js | base64 -w0)
+VIEWER_PKG_JSON_B64=$(gzip -9c viewer-app/package.json | base64 -w0)
 
+# Node and decompression
 cat > user-data-viewer.sh << EOF
 #!/bin/bash
 dnf update -y
-dnf install -y nodejs
+dnf install -y nodejs22 nodejs22-npm
 mkdir -p /opt/app
-echo "$VIEWER_APP_JS_B64" | base64 -d > /opt/app/app.js
-echo "$VIEWER_PKG_JSON_B64" | base64 -d > /opt/app/package.json
+echo "$VIEWER_APP_JS_B64" | base64 -d | gunzip > /opt/app/app.js
+echo "$VIEWER_PKG_JSON_B64" | base64 -d | gunzip > /opt/app/package.json
 cd /opt/app
 npm install --omit=dev
 
+# E3b: topic the viewer publishes to Environment=SNS_TOPIC_ARN=$SNS_TOPIC_ARN
 cat > /etc/systemd/system/viewer.service << 'SERVICE'
 [Unit]
 Description=Viewer App
@@ -115,6 +132,7 @@ After=network.target
 [Service]
 Environment=BUCKET_NAME=$BUCKET_NAME
 Environment=AWS_REGION=$AWS_REGION
+Environment=SNS_TOPIC_ARN=$SNS_TOPIC_ARN
 Environment=PORT=3000
 WorkingDirectory=/opt/app
 ExecStart=/usr/bin/node /opt/app/app.js
@@ -134,6 +152,10 @@ echo "== Building launch template data =="
 
 UPLOADER_USERDATA_B64=$(base64 -w0 user-data-uploader.sh)
 VIEWER_USERDATA_B64=$(base64 -w0 user-data-viewer.sh)
+
+# E3c: user-data sizes (limit is 16384 bytes)
+echo "uploader user-data bytes: $(wc -c < user-data-uploader.sh)"
+echo "viewer user-data bytes:   $(wc -c < user-data-viewer.sh)"
 
 cat > uploader-lt-data.json << EOF
 {
