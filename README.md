@@ -7,6 +7,7 @@
 - Troubleshoot SNS IAM Permission errors
 - Troubleshoot Node version incompatibilities on local and uploader/viewer tiers
 - Modify existing shell scripts and app.js files to meet project requirements
+- Evaluate AWS Compression Algorithms (gzip versus brotli)
 
 ---
 
